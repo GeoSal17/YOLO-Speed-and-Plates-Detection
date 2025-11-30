@@ -22,6 +22,6 @@ All processing is done on a FastAPI backend, and a lightweight JS frontend sends
   "track_id": 14,
   "plate": "ABC123",
   "speed_kmh": 4.70,
-  "timestamp": "2025-11-29 17:32:58"
+  "timestamp": "29-11-2025 17:32:58"
 }
 ```
