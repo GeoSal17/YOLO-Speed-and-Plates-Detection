@@ -4,6 +4,7 @@ import json
 import pytz
 import numpy as np
 from datetime import datetime
+from collections import defaultdict
 from fastapi import FastAPI, UploadFile, File
 from ultralytics import YOLO
 import supervision as sv
@@ -58,6 +59,8 @@ try:
         infracciones = json.load(f)
 except:
     infracciones = []
+
+plate_memory = defaultdict(list)
 
 @app.post("/frame")
 async def process_frame(frame: UploadFile = File(...)):
@@ -144,35 +147,49 @@ async def process_frame(frame: UploadFile = File(...)):
                 abs_y2 = y1e + py2
 
                 plate_crop = img[abs_y1:abs_y2, abs_x1:abs_x2]
-                #plate_crop = crop[py1:py2, px1:px2]
                 print("[DEBUG] plate_crop shape:", plate_crop.shape)
 
-                # Escalar la placa para que PaddleOCR pueda leerla
+                #escalar placa si está muy chica
                 h, w = plate_crop.shape[:2]
-
                 if h < 80:
-                    scale_factor = max(2, int(80 / h))  # asegura mínimo 80px de alto
-                    plate_crop = cv.resize(plate_crop, (w * scale_factor, h * scale_factor), interpolation=cv.INTER_CUBIC)
-                    print(f"[DEBUG] plate_crop UPSCALED to: {plate_crop.shape}")
+                    scale_factor = max(2, int(80 / h))
+                    plate_crop = cv.resize(plate_crop, (w*scale_factor, h*scale_factor), interpolation=cv.INTER_CUBIC)
+                    print("[DEBUG] plate_crop UPSCALED to:", plate_crop.shape)
 
-                #leer placas
-                try:
-                    ocr_out = ocr.ocr(plate_crop)
-                    print("[DEBUG] OCR OUTPUT:", ocr_out)
+                plate_text = "UNKNOWN"
+                best_conf = 0.0
 
-                    if (
-                        isinstance(ocr_out, list)
-                        and len(ocr_out) > 0
-                        and isinstance(ocr_out[0], dict)
-                        and "rec_texts" in ocr_out[0]
-                        and len(ocr_out[0]["rec_texts"]) > 0
-                    ):
-                        plate_text = ocr_out[0]["rec_texts"][0]
-                    else:
-                        plate_text = "UNKNOWN"
-                except Exception as e:
-                    print("[DEBUG] OCR FAIL:", e)
-                    plate_text = "UNKNOWN"
+                MAX_OCR_TRIES = 5
+
+                for attempt in range(MAX_OCR_TRIES):
+                    try:
+                        ocr_out = ocr.ocr(plate_crop)
+                        print(f"[DEBUG] OCR output intento {attempt+1}:", ocr_out)
+
+                        if (
+                            isinstance(ocr_out, list)
+                            and len(ocr_out) > 0
+                            and isinstance(ocr_out[0], dict)
+                            and "rec_texts" in ocr_out[0]
+                            and len(ocr_out[0]["rec_texts"]) > 0
+                        ):
+                            text = ocr_out[0]["rec_texts"][0]
+                            conf = ocr_out[0]["rec_scores"][0]
+
+                            if conf > best_conf:   #mejor lectura
+                                best_conf = conf
+                                plate_text = text
+
+                    except Exception as e:
+                        print(f"[DEBUG] OCR FAIL intento {attempt+1}:", e)
+
+                #guardar historial por track
+                plate_memory[track_id].append(plate_text)
+
+                #elegir por mayoría (para mejor estabilidad)
+                from collections import Counter
+                counts = Counter(plate_memory[track_id])
+                plate_text = counts.most_common(1)[0][0]
 
             else:
                 print("[DEBUG] OCR SKIPPED: plate_dets empty")
